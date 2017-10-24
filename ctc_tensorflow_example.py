@@ -8,6 +8,7 @@ import time
 import tensorflow as tf
 import scipy.io.wavfile as wav
 import numpy as np
+import cv2
 
 from six.moves import xrange as range
 from IAM_input import IAM_input
@@ -40,6 +41,7 @@ num_epochs = 200
 num_hidden = 100
 num_layers = 1
 batch_size = 1
+n_channels = 1
 initial_learning_rate = 1e-2
 momentum = 0.9
 
@@ -48,19 +50,10 @@ num_batches_per_epoch = int(num_examples/batch_size)
 
 # Loading the data
 
-audio_filename = maybe_download('LDC93S1.wav', 93638)
 target_filename = maybe_download('LDC93S1.txt', 62)
 
-fs, audio = wav.read(audio_filename)
-
-inputs = mfcc(audio, samplerate=fs)
-# Tranform in 3D array
-train_inputs = np.asarray(inputs[np.newaxis, :])
-train_inputs = (train_inputs - np.mean(train_inputs))/np.std(train_inputs)
-############################################ SWAP TRAIN INPUT
-print("TRAIN INPUTS BEFORE",train_inputs.shape, train_inputs)
-train_inputs=X[0]
-train_inputs=np.transpose(train_inputs)
+train_inputs=X
+#train_inputs=np.transpose(train_inputs)
 print("TRAIN INPUTS AFTER",train_inputs.shape, train_inputs)
 ###############################
 
@@ -68,28 +61,9 @@ train_seq_len = [train_inputs.shape[1]]
 print (train_seq_len,"TRAIN SEQ LEN")
 
 # Readings targets
-with open(target_filename, 'r') as f:
 
-    #Only the last line is necessary
-    line = f.readlines()[-1]
-
-    # Get only the words between [a-z] and replace period for none
-    original = ' '.join(line.strip().lower().split(' ')[2:]).replace('.', '')
-    targets = original.replace(' ', '  ')
-    targets = targets.split(' ')
-
-# Adding blank label
-targets = np.hstack([SPACE_TOKEN if x == '' else list(x) for x in targets])
-
-# Transform char into index
-targets = np.asarray([SPACE_INDEX if x == SPACE_TOKEN else ord(x) - FIRST_INDEX
-                      for x in targets])
-
-
-###################################SWAP TRAIN TARGETS
-print("TARGETS BEFORE",type(targets),targets.shape)
 targets=Y[0]
-print("TARGETS AFTER",type(targets),targets.shape)
+
 ####################################################
 
 # Creating sparse representation to feed the placeholder
@@ -107,14 +81,26 @@ with graph.as_default():
     # e.g: log filter bank or MFCC features
     # Has size [batch_size, max_stepsize, num_features], but the
     # batch_size and max_stepsize can vary along each step
-    inputs = tf.placeholder(tf.float32, [None, None, num_features])
 
+    inputs = tf.placeholder(tf.float32, [batch_size,num_features, None, n_channels])
     # Here we use sparse_placeholder that will generate a
     # SparseTensor required by ctc_loss op.
     targets = tf.sparse_placeholder(tf.int32)
-
     # 1d array of size [batch_size]
     seq_len = tf.placeholder(tf.int32, [None])
+
+    ############ CONVOLUTION
+    w_conv1 = tf.Variable(tf.random_normal([5, 5, 1, 32]))
+    b_conv1 = tf.Variable(tf.constant(0., shape=[32]))
+
+    conv1 = tf.nn.conv2d(inputs, w_conv1, strides=[1, 1, 1, 1], padding='SAME')
+
+    conv1 = tf.nn.bias_add(conv1, b_conv1)
+    conv1 = tf.nn.relu(conv1)
+    conv1 = tf.reshape(conv1,[batch_size,-1,num_features*32])
+    ############
+
+
 
     # Defining the cell
     # Can be:
@@ -127,7 +113,7 @@ with graph.as_default():
                                         state_is_tuple=True)
 
     # The second output is the last state and we will no use that
-    outputs, _ = tf.nn.dynamic_rnn(stack, inputs, seq_len, dtype=tf.float32)
+    outputs, _ = tf.nn.dynamic_rnn(stack, conv1, seq_len, dtype=tf.float32)
 
     shape = tf.shape(inputs)
     batch_s, max_timesteps = shape[0], shape[1]
@@ -199,6 +185,8 @@ with tf.Session(graph=graph) as session:
         log = "Epoch {}/{}, train_cost = {:.3f}, train_ler = {:.3f}, val_cost = {:.3f}, val_ler = {:.3f}, time = {:.3f}"
         print(log.format(curr_epoch+1, num_epochs, train_cost, train_ler,
                          val_cost, val_ler, time.time() - start))
+
+        
     # Decoding
     d = session.run(decoded[0], feed_dict=feed)
     str_decoded = ''.join([chr(x) for x in np.asarray(d[1]) + FIRST_INDEX])
@@ -207,5 +195,4 @@ with tf.Session(graph=graph) as session:
     # Replacing space label to space
     str_decoded = str_decoded.replace(chr(ord('a') - 1), ' ')
 
-    print('Original:\n%s' % original)
     print('Decoded:\n%s' % str_decoded)
