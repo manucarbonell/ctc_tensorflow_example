@@ -10,7 +10,7 @@ import scipy.io.wavfile as wav
 import numpy as np
 
 from six.moves import xrange as range
-
+from IAM_input import IAM_input
 try:
     from python_speech_features import mfcc
 except ImportError:
@@ -20,19 +20,24 @@ except ImportError:
 from utils import maybe_download as maybe_download
 from utils import sparse_tuple_from as sparse_tuple_from
 
+iam_train=IAM_input()
+X,Y=iam_train.get_batch()
+
 # Constants
 SPACE_TOKEN = '<space>'
 SPACE_INDEX = 0
 FIRST_INDEX = ord('a') - 1  # 0 is reserved to space
 
 # Some configs
-num_features = 13
+################################################### CHANGE NUMBER OF FEATURES TO IMAGE HEIGHT
+#num_features = 13
+num_features=64
 # Accounting the 0th indice +  space + blank label = 28 characters
 num_classes = ord('z') - ord('a') + 1 + 1 + 1
 
 # Hyper-parameters
 num_epochs = 200
-num_hidden = 50
+num_hidden = 100
 num_layers = 1
 batch_size = 1
 initial_learning_rate = 1e-2
@@ -52,7 +57,15 @@ inputs = mfcc(audio, samplerate=fs)
 # Tranform in 3D array
 train_inputs = np.asarray(inputs[np.newaxis, :])
 train_inputs = (train_inputs - np.mean(train_inputs))/np.std(train_inputs)
+############################################ SWAP TRAIN INPUT
+print("TRAIN INPUTS BEFORE",train_inputs.shape, train_inputs)
+train_inputs=X[0]
+train_inputs=np.transpose(train_inputs)
+print("TRAIN INPUTS AFTER",train_inputs.shape, train_inputs)
+###############################
+
 train_seq_len = [train_inputs.shape[1]]
+print (train_seq_len,"TRAIN SEQ LEN")
 
 # Readings targets
 with open(target_filename, 'r') as f:
@@ -71,6 +84,13 @@ targets = np.hstack([SPACE_TOKEN if x == '' else list(x) for x in targets])
 # Transform char into index
 targets = np.asarray([SPACE_INDEX if x == SPACE_TOKEN else ord(x) - FIRST_INDEX
                       for x in targets])
+
+
+###################################SWAP TRAIN TARGETS
+print("TARGETS BEFORE",type(targets),targets.shape)
+targets=Y[0]
+print("TARGETS AFTER",type(targets),targets.shape)
+####################################################
 
 # Creating sparse representation to feed the placeholder
 train_targets = sparse_tuple_from([targets])

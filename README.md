@@ -1,12 +1,14 @@
 # CTC + Tensorflow Example
 
-A toy example showing how to get CTC cost function working with Tensorflow for automatic speech recognition.
+
+A modification of the original speech recognition example to work with IAM handwritten sentence images.
+
 
 ## Requirements
 
+- IAM Handwritten Text Images dataset
 - Python 2.7+
 - Tensorflow 1.0+
-- python_speech_features
 - numpy
 - scipy
 
