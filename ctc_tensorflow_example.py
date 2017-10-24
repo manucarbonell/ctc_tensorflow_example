@@ -37,11 +37,11 @@ num_classes = ord('z') - ord('a') + 1 + 1 + 1
 
 # Hyper-parameters
 num_epochs = 200
-num_hidden = 100
+num_hidden = 120
 num_layers = 1
 batch_size = 1
 n_channels = 1
-initial_learning_rate = 1e-2
+initial_learning_rate = 1e-3
 momentum = 0.9
 
 num_examples = 50
@@ -136,14 +136,15 @@ with tf.Session(graph=graph) as session:
     for curr_epoch in range(num_epochs):
         train_cost = train_ler = 0
         start = time.time()
-
+        X, Y = iam_train.get_batch()
+        Y = Y[0]
         for batch in range(num_batches_per_epoch):
             print("EPOCH STEP",batch)
 
-            X, Y = iam_train.get_batch()
+
 
             train_seq_len = [X.shape[1]]
-            Y = Y[0]
+
 
             train_targets = sparse_tuple_from([Y])
             feed = {inputs: X,
@@ -151,6 +152,9 @@ with tf.Session(graph=graph) as session:
                     seq_len: train_seq_len}
 
             batch_cost, _ = session.run([cost, optimizer], feed)
+            if batch % 10 == 0:
+                decod = session.run(decoded,feed)
+                print ("DECODED:", iam_train.id_to_char(decod[0][1]),"\nY:",iam_train.id_to_char(Y))
             train_cost += batch_cost*batch_size
             train_ler += session.run(ler, feed_dict=feed)*batch_size
 

@@ -30,6 +30,14 @@ class IAM_input:
         #print sentence,ids,type(ids)
         return ids
 
+    def id_to_char(self,ids):
+        sentence=[]
+        for id in ids:
+            sentence.append(self.symbsList[id])
+        sentence="".join(sentence)
+        return sentence
+
+
     def create_line_iterator(self):
         f = open(os.path.join(self.basedir, 'lines_'+self.partition+'.txt'))
         lines = f.readlines()
