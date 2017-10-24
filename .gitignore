@@ -1,6 +1,9 @@
 
 # Created by https://www.gitignore.io/api/macos,sublimetext,windows,linux,python,ruby,matlab
 
+# IDE
+.idea/
+
 ### macOS ###
 *.DS_Store
 .AppleDouble
