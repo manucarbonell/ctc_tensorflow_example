@@ -32,7 +32,7 @@ FIRST_INDEX = ord('a') - 1  # 0 is reserved to space
 
 # Some configs
 ################################################### CHANGE NUMBER OF FEATURES TO IMAGE HEIGHT
-num_features=64
+num_features=int(iam_train.im_height)
 # Accounting the 0th indice +  space + blank label = 28 characters
 num_classes = ord('z') - ord('a') + 1 + 1 + 1
 
@@ -40,7 +40,7 @@ num_classes = ord('z') - ord('a') + 1 + 1 + 1
 num_epochs = 200
 num_hidden = 120
 num_layers = 1
-batch_size = 1
+batch_size = iam_train.batch_size
 n_channels = 1
 initial_learning_rate = 1e-3
 momentum = 0.9
@@ -55,8 +55,7 @@ checkpoint_path="./checkpoints"
 graph = tf.Graph()
 
 with graph.as_default():
-    # e.g: log filter bank or MFCC features
-    # Has size [batch_size, max_stepsize, num_features], but the
+    # Input tensor has size [batch_size,num_features,max_stepsize, n_channels], but the
     # batch_size and max_stepsize can vary along each step
 
     inputs = tf.placeholder(tf.float32, [batch_size,num_features, None, n_channels])
@@ -120,8 +119,14 @@ with graph.as_default():
     loss = tf.nn.ctc_loss(targets, logits, seq_len)
     cost = tf.reduce_mean(loss)
 
-    optimizer = tf.train.MomentumOptimizer(initial_learning_rate,
-                                           0.9).minimize(cost)
+    global_step = tf.Variable(0, trainable=False)
+
+
+
+    learning_rate = tf.train.exponential_decay(initial_learning_rate, global_step,
+                                               100, 0.96, staircase=True)
+
+    optimizer = tf.train.MomentumOptimizer(initial_learning_rate,0.9).minimize(cost,global_step=global_step)
 
     # Option 2: tf.nn.ctc_beam_search_decoder
     # (it's slower but you'll get better results)
@@ -133,7 +138,9 @@ with graph.as_default():
 
 with tf.Session(graph=graph) as session:
     # Initializate the weights and biases
-    tf.global_variables_initializer().run()
+    tf.global_variables_initializer().run(  )
+
+
 
     saver = tf.train.Saver(tf.global_variables())
 
@@ -149,28 +156,34 @@ with tf.Session(graph=graph) as session:
     else:
         print("No checkpoint found, start training from beginning.")
 
+
+
     for curr_epoch in range(num_epochs):
         train_cost = train_ler = 0
         start = time.time()
-        X, Y = iam_train.get_batch()
-        Y = Y[0]
+
         for batch in range(num_batches_per_epoch):
+        #for batch in range(10):
+            X, Y = iam_train.get_batch()
+
+            train_seq_len = [x.shape[1] for x in X]
             print("EPOCH",curr_epoch,"STEP",batch)
 
-
-
-            train_seq_len = [X.shape[1]]
-
-
-            train_targets = sparse_tuple_from([Y])
+            train_targets = sparse_tuple_from(Y)
+            print ("TARGETS",train_targets)
+            print("inputs",X.shape)
             feed = {inputs: X,
                     targets: train_targets,
                     seq_len: train_seq_len}
 
             batch_cost, _ = session.run([cost, optimizer], feed)
-            if batch % 10 == 0:
-                decod = session.run(decoded,feed)
-                print ("DECODED:", iam_train.id_to_char(decod[0][1]),"\nY:",iam_train.id_to_char(Y))
+            #if batch % 10 == 0:
+                #decod = session.run(decoded,feed)
+
+                #for j in range(batch_size):
+                    #print(decod,(decod),len(decod[0]))
+                    #print("DECODED:", iam_train.id_to_char(decod[j][1]))
+                    #print("Y:", iam_train.id_to_char(Y[j]))
             train_cost += batch_cost*batch_size
             train_ler += session.run(ler, feed_dict=feed)*batch_size
 
@@ -178,7 +191,7 @@ with tf.Session(graph=graph) as session:
         train_ler /= num_examples
 
         print("Saving model...")
-        saver.save(session,ckpt.model_checkpoint_path)
+        saver.save(session,os.path.join(checkpoint_path,'model.ckpt'))
         print ("Finished.")
 
         log = "Epoch {}/{}, train_cost = {:.3f}, train_ler = {:.3f} time = {:.3f}"

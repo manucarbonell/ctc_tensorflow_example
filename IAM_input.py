@@ -12,8 +12,20 @@ class IAM_input:
         self.create_line_iterator()
         self.line_id=self.line_iterator.next()
         self.index_in_epoch=0
-        self.batch_size=1
-        self.im_height=64.
+        self.batch_size=2
+        self.im_height=32.
+        self.max_seq_len=600
+    def get_max_seq_len(self):
+        max_len=0
+        for line_id in self.line_iterator:
+            im=self.get_image(line_id)
+
+            len=im.shape[1]
+            if len>max_len:
+                max_len=len
+            print max_len
+
+        return max_len
 
     def char_to_id(self,sentence):
         ids=[]
@@ -72,7 +84,7 @@ class IAM_input:
 
         im2 = im2[:, :, 0]
 
-        def binarize(im,threshold=120):
+        def binarize(im,threshold=50):
             for i in range(im.shape[0]):
                 for j in range(im.shape[1]):
                     if im[i,j]<threshold or not im2[i,j]:
@@ -89,6 +101,7 @@ class IAM_input:
     def get_batch(self):
         X=[]
         Y=[]
+        max_seq_len=0
         for i in range(self.batch_size):
             try:
                 self.line_id=self.line_iterator.next()
@@ -97,23 +110,42 @@ class IAM_input:
                 self.create_line_iterator()
                 self.index_in_epoch = 0
                 self.line_id = self.line_iterator.next()
+            im=self.get_image(self.line_id)
 
-            X.append(self.get_image(self.line_id))
+            if im.shape[1]>max_seq_len:
+                max_seq_len=im.shape[1]
+
+            X.append(im)
+
             Y.append(self.transcriptions[self.line_id])
             self.index_in_epoch += 1
-        X=np.stack(X)
 
-        return X,Y
-        
+        paddedX=[]
+        #Image padding
+        for im in X:
+            padded_im=np.zeros((int(self.im_height),max_seq_len,1))
+            padded_im[:,0:im.shape[1]]=im
+            paddedX.append(padded_im)
+
+        paddedX=np.stack(paddedX)
+
+        #return X,Y
+        return paddedX,Y
+
 
 def main():
     iam=IAM_input()
     X,Y=iam.get_batch()
+    print (X)
+    for x in X:
+        cv2.imwrite("X.jpg", x[:, :, 0])
+        raw_input()
+    '''
     for i in range(len(X)):
         im=Image.fromarray(X[i,:,:,0],mode="L")
 
         im.show()
         print(Y)
-        raw_input()
+        raw_input()'''
 if __name__=="__main__":
     main()
