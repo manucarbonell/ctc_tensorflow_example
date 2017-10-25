@@ -9,6 +9,7 @@ import tensorflow as tf
 import scipy.io.wavfile as wav
 import numpy as np
 import cv2
+import os
 
 from six.moves import xrange as range
 from IAM_input import IAM_input
@@ -44,13 +45,15 @@ n_channels = 1
 initial_learning_rate = 1e-3
 momentum = 0.9
 
-num_examples = 50
+num_examples = iam_train.total_examples
 num_batches_per_epoch = int(num_examples/batch_size)
 
+checkpoint_path="./checkpoints"
 
 # THE MAIN CODE!
 
 graph = tf.Graph()
+
 with graph.as_default():
     # e.g: log filter bank or MFCC features
     # Has size [batch_size, max_stepsize, num_features], but the
@@ -132,6 +135,19 @@ with tf.Session(graph=graph) as session:
     # Initializate the weights and biases
     tf.global_variables_initializer().run()
 
+    saver = tf.train.Saver(tf.global_variables())
+
+    if not os.path.exists(checkpoint_path):
+        os.mkdir(checkpoint_path)
+
+    ckpt = tf.train.get_checkpoint_state(checkpoint_path)
+
+    if ckpt and ckpt.model_checkpoint_path:
+        saver.restore(session, ckpt.model_checkpoint_path)
+        print("Model restored.")
+
+    else:
+        print("No checkpoint found, start training from beginning.")
 
     for curr_epoch in range(num_epochs):
         train_cost = train_ler = 0
@@ -139,7 +155,7 @@ with tf.Session(graph=graph) as session:
         X, Y = iam_train.get_batch()
         Y = Y[0]
         for batch in range(num_batches_per_epoch):
-            print("EPOCH STEP",batch)
+            print("EPOCH",curr_epoch,"STEP",batch)
 
 
 
@@ -161,7 +177,9 @@ with tf.Session(graph=graph) as session:
         train_cost /= num_examples
         train_ler /= num_examples
 
-
+        print("Saving model...")
+        saver.save(session,ckpt.model_checkpoint_path)
+        print ("Finished.")
 
         log = "Epoch {}/{}, train_cost = {:.3f}, train_ler = {:.3f} time = {:.3f}"
         print(log.format(curr_epoch+1, num_epochs, train_cost, train_ler,
