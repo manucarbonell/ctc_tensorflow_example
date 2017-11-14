@@ -12,8 +12,9 @@ class IAM_input:
         self.create_line_iterator()
         self.line_id=self.line_iterator.next()
         self.index_in_epoch=0
-        self.batch_size=2
-        self.im_height=32.
+        self.batch_size=1
+        self.im_height=64.
+        self.im_depth=1
         self.max_seq_len=600
     def get_max_seq_len(self):
         max_len=0

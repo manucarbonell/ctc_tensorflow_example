@@ -4,7 +4,6 @@ from __future__ import division
 from __future__ import print_function
 
 import time
-
 import tensorflow as tf
 import scipy.io.wavfile as wav
 import numpy as np
@@ -13,198 +12,152 @@ import os
 
 from six.moves import xrange as range
 from IAM_input import IAM_input
-try:
-    from python_speech_features import mfcc
-except ImportError:
-    print("Failed to import python_speech_features.\n Try pip install python_speech_features.")
-    raise ImportError
-
-from utils import maybe_download as maybe_download
 from utils import sparse_tuple_from as sparse_tuple_from
 
-iam_train=IAM_input()
+class HTR:
+    def __init__(self):
+        self.dataset=IAM_input()
+        self.num_features = int(self.dataset.im_height)
+        self.batch_size = self.dataset.batch_size
+        self.n_channels = self.dataset.im_depth
+        self.num_classes = 28
+        self.initial_learning_rate=1e-3
+        self.num_epochs=200
+        self.num_examples=self.dataset.total_examples
+        self.num_batches_per_epoch = int(self.num_examples / self.batch_size)
+        self.checkpoint_path='./checkpoints'
+        self.hidden_neurons=254
+
+    def model(self,inputs,seq_len):
+        w_conv1 = tf.Variable(tf.random_normal([3, 3, 1, 28]))
+        b_conv1 = tf.Variable(tf.constant(0., shape=[28]))
+
+        conv1 = tf.nn.conv2d(inputs, w_conv1, strides=[1, 1, 1, 1], padding='SAME')
+
+        conv1 = tf.nn.bias_add(conv1, b_conv1)
+        conv1 = tf.nn.relu(conv1)
+        conv1 = tf.reshape(conv1, [self.batch_size, -1, self.num_features * 28])
+
+        cell = tf.contrib.rnn.LSTMCell(self.hidden_neurons, state_is_tuple=True)
+
+        # Stacking rnn cells
+        stack = tf.contrib.rnn.MultiRNNCell([cell] * 1,
+                                            state_is_tuple=True)
+
+        # The second output is the last state and we will no use that
+        outputs, _ = tf.nn.dynamic_rnn(stack, conv1, seq_len, dtype=tf.float32)
+
+        shape = tf.shape(inputs)
+        batch_s, max_timesteps = shape[0], shape[1]
+
+        # Reshaping to apply the same weights over the timesteps
+        outputs = tf.reshape(outputs, [-1, self.hidden_neurons])
+
+        # Truncated normal with mean 0 and stdev=0.1
+        # Tip: Try another initialization
+        # see https://www.tensorflow.org/versions/r0.9/api_docs/python/contrib.layers.html#initializers
+        W = tf.Variable(tf.truncated_normal([self.hidden_neurons,
+                                             self.num_classes],
+                                            stddev=0.1))
+        # Zero initialization
+        # Tip: Is tf.zeros_initializer the same?
+        b = tf.Variable(tf.constant(0., shape=[self.num_classes]))
+
+        # Doing the affine projection
+        logits = tf.matmul(outputs, W) + b
+
+        # Reshaping back to the original shape
+        logits = tf.reshape(logits, [batch_s, -1, self.num_classes])
+
+        # Time major
+        logits = tf.transpose(logits, (1, 0, 2))
+
+        return logits
+
+    def train(self,session):
+
+        inputs = tf.placeholder(tf.float32, [self.batch_size, self.num_features, None, self.dataset.im_depth])
+
+        targets = tf.sparse_placeholder(tf.int32)
+
+        seq_len = tf.placeholder(tf.int32, [None])
+
+        logits=self.model(inputs,seq_len)
+
+        loss = tf.nn.ctc_loss(targets, logits, seq_len)
+
+        cost = tf.reduce_mean(loss)
+
+        global_step = tf.Variable(0, trainable=False)
+
+        learning_rate = tf.train.exponential_decay(self.initial_learning_rate, global_step,
+                                                   8000, 0.98, staircase=True)
+
+        optimizer = tf.train.MomentumOptimizer(learning_rate, 0.9).minimize(cost, global_step=global_step)
+
+        # Option 2: tf.nn.ctc_beam_search_decoder
+        # (it's slower but you'll get better results)
+        decoded, log_prob = tf.nn.ctc_greedy_decoder(logits, seq_len)
+
+        # Inaccuracy: label error rate
+        ler = tf.reduce_mean(tf.edit_distance(tf.cast(decoded[0], tf.int32),
+                                              targets))
+
+        tf.global_variables_initializer().run(session=sess)
+
+        saver = tf.train.Saver(tf.global_variables())
+
+        if not os.path.exists(self.checkpoint_path):
+            os.mkdir(self.checkpoint_path)
+
+        ckpt = tf.train.get_checkpoint_state(self.checkpoint_path)
+
+        if ckpt and ckpt.model_checkpoint_path:
+            saver.restore(session, ckpt.model_checkpoint_path)
+            print("Model restored.")
+
+        else:
+            print("No checkpoint found, start training from beginning.")
+
+        for curr_epoch in range(self.num_epochs):
+            train_cost = train_ler = 0
+            start = time.time()
+
+            X, Y = self.dataset.get_batch()
+
+            for batch in range(self.num_batches_per_epoch):
 
 
-# Constants
-SPACE_TOKEN = '<space>'
-SPACE_INDEX = 0
-FIRST_INDEX = ord('a') - 1  # 0 is reserved to space
+                train_seq_len = [x.shape[1] for x in X]
 
-# Some configs
-################################################### CHANGE NUMBER OF FEATURES TO IMAGE HEIGHT
-num_features=int(iam_train.im_height)
-# Accounting the 0th indice +  space + blank label = 28 characters
-num_classes = ord('z') - ord('a') + 1 + 1 + 1
+                print("EPOCH", curr_epoch, "PROGRESS", self.dataset.index_in_epoch, self.dataset.total_examples)
 
-# Hyper-parameters
-num_epochs = 200
-num_hidden = 120
-num_layers = 1
-batch_size = iam_train.batch_size
-n_channels = 1
-initial_learning_rate = 1e-3
-momentum = 0.9
+                train_targets = sparse_tuple_from(Y)
 
-num_examples = iam_train.total_examples
-num_batches_per_epoch = int(num_examples/batch_size)
+                feed = {inputs: X,
+                        targets: train_targets,
+                        seq_len: train_seq_len}
 
-checkpoint_path="./checkpoints"
+                batch_cost, _ = session.run([cost, optimizer], feed)
 
-# THE MAIN CODE!
+                train_cost += batch_cost * self.batch_size
+                train_ler += session.run(ler, feed_dict=feed) * self.batch_size
 
-graph = tf.Graph()
+                #VERBOSE
+                if batch % 2 == 0:
+                    decod = session.run(decoded, feed)
 
-with graph.as_default():
-    # Input tensor has size [batch_size,num_features,max_stepsize, n_channels], but the
-    # batch_size and max_stepsize can vary along each step
-
-    inputs = tf.placeholder(tf.float32, [batch_size,num_features, None, n_channels])
-    # Here we use sparse_placeholder that will generate a
-    # SparseTensor required by ctc_loss op.
-    targets = tf.sparse_placeholder(tf.int32)
-    # 1d array of size [batch_size]
-    seq_len = tf.placeholder(tf.int32, [None])
-
-    ############ CONVOLUTION
-    w_conv1 = tf.Variable(tf.random_normal([5, 5, 1, 32]))
-    b_conv1 = tf.Variable(tf.constant(0., shape=[32]))
-
-    conv1 = tf.nn.conv2d(inputs, w_conv1, strides=[1, 1, 1, 1], padding='SAME')
-
-    conv1 = tf.nn.bias_add(conv1, b_conv1)
-    conv1 = tf.nn.relu(conv1)
-    conv1 = tf.reshape(conv1,[batch_size,-1,num_features*32])
-    ############
+                    for j in range(self.batch_size):
+                        # print("Y:", j, iam_train.id_to_char(Y[j]))
+                        print("DECODED BATCH OUTPUT:", self.dataset.id_to_char(decod[0][1]))
 
 
 
-    # Defining the cell
-    # Can be:
-    #   tf.nn.rnn_cell.RNNCell
-    #   tf.nn.rnn_cell.GRUCell
-    cell = tf.contrib.rnn.LSTMCell(num_hidden, state_is_tuple=True)
-
-    # Stacking rnn cells
-    stack = tf.contrib.rnn.MultiRNNCell([cell] * num_layers,
-                                        state_is_tuple=True)
-
-    # The second output is the last state and we will no use that
-    outputs, _ = tf.nn.dynamic_rnn(stack, conv1, seq_len, dtype=tf.float32)
-
-    shape = tf.shape(inputs)
-    batch_s, max_timesteps = shape[0], shape[1]
-
-    # Reshaping to apply the same weights over the timesteps
-    outputs = tf.reshape(outputs, [-1, num_hidden])
-
-    # Truncated normal with mean 0 and stdev=0.1
-    # Tip: Try another initialization
-    # see https://www.tensorflow.org/versions/r0.9/api_docs/python/contrib.layers.html#initializers
-    W = tf.Variable(tf.truncated_normal([num_hidden,
-                                         num_classes],
-                                        stddev=0.1))
-    # Zero initialization
-    # Tip: Is tf.zeros_initializer the same?
-    b = tf.Variable(tf.constant(0., shape=[num_classes]))
-
-    # Doing the affine projection
-    logits = tf.matmul(outputs, W) + b
-
-    # Reshaping back to the original shape
-    logits = tf.reshape(logits, [batch_s, -1, num_classes])
-
-    # Time major
-    logits = tf.transpose(logits, (1, 0, 2))
-
-    loss = tf.nn.ctc_loss(targets, logits, seq_len)
-    cost = tf.reduce_mean(loss)
-
-    global_step = tf.Variable(0, trainable=False)
+transcriptor=HTR()
 
 
 
-    learning_rate = tf.train.exponential_decay(initial_learning_rate, global_step,
-                                               100, 0.96, staircase=True)
+with tf.Session() as sess:
 
-    optimizer = tf.train.MomentumOptimizer(initial_learning_rate,0.9).minimize(cost,global_step=global_step)
+    transcriptor.train(sess)
 
-    # Option 2: tf.nn.ctc_beam_search_decoder
-    # (it's slower but you'll get better results)
-    decoded, log_prob = tf.nn.ctc_greedy_decoder(logits, seq_len)
-
-    # Inaccuracy: label error rate
-    ler = tf.reduce_mean(tf.edit_distance(tf.cast(decoded[0], tf.int32),
-                                          targets))
-
-with tf.Session(graph=graph) as session:
-    # Initializate the weights and biases
-    tf.global_variables_initializer().run(  )
-
-
-
-    saver = tf.train.Saver(tf.global_variables())
-
-    if not os.path.exists(checkpoint_path):
-        os.mkdir(checkpoint_path)
-
-    ckpt = tf.train.get_checkpoint_state(checkpoint_path)
-
-    if ckpt and ckpt.model_checkpoint_path:
-        saver.restore(session, ckpt.model_checkpoint_path)
-        print("Model restored.")
-
-    else:
-        print("No checkpoint found, start training from beginning.")
-
-
-
-    for curr_epoch in range(num_epochs):
-        train_cost = train_ler = 0
-        start = time.time()
-
-        for batch in range(num_batches_per_epoch):
-        #for batch in range(10):
-            X, Y = iam_train.get_batch()
-
-            train_seq_len = [x.shape[1] for x in X]
-            print("EPOCH",curr_epoch,"STEP",batch)
-
-            train_targets = sparse_tuple_from(Y)
-            print ("TARGETS",train_targets)
-            print("inputs",X.shape)
-            feed = {inputs: X,
-                    targets: train_targets,
-                    seq_len: train_seq_len}
-
-            batch_cost, _ = session.run([cost, optimizer], feed)
-            #if batch % 10 == 0:
-                #decod = session.run(decoded,feed)
-
-                #for j in range(batch_size):
-                    #print(decod,(decod),len(decod[0]))
-                    #print("DECODED:", iam_train.id_to_char(decod[j][1]))
-                    #print("Y:", iam_train.id_to_char(Y[j]))
-            train_cost += batch_cost*batch_size
-            train_ler += session.run(ler, feed_dict=feed)*batch_size
-
-        train_cost /= num_examples
-        train_ler /= num_examples
-
-        print("Saving model...")
-        saver.save(session,os.path.join(checkpoint_path,'model.ckpt'))
-        print ("Finished.")
-
-        log = "Epoch {}/{}, train_cost = {:.3f}, train_ler = {:.3f} time = {:.3f}"
-        print(log.format(curr_epoch+1, num_epochs, train_cost, train_ler,
-                         time.time() - start))
-
-
-    # Decoding
-    d = session.run(decoded[0], feed_dict=feed)
-    str_decoded = ''.join([chr(x) for x in np.asarray(d[1]) + FIRST_INDEX])
-    # Replacing blank label to none
-    str_decoded = str_decoded.replace(chr(ord('z') + 1), '')
-    # Replacing space label to space
-    str_decoded = str_decoded.replace(chr(ord('a') - 1), ' ')
-
-    print('Decoded:\n%s' % str_decoded)
